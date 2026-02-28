@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phoenixgithub"
+version = "0.1.0"
+description = "Always-on AI agent that picks up GitHub issues, implements them, and creates PRs for human review."
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-anthropic>=0.3",
+    "langchain-openai>=0.3",
+    "PyGithub>=2.3",
+    "gitpython>=3.1",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+    "click>=8.1",
+]
+
+[project.scripts]
+phoenixgithub = "phoenixgithub.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

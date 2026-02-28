@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+
+# Workspace (cloned repos, run state)
+workspace/
+.watcher-state.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
