@@ -63,7 +63,7 @@ def watch(log_level: str | None) -> None:
     console.print(f"[bold green]PhoenixGitHub Watcher[/bold green]")
     console.print(f"  Repo:     {config.github.repo}")
     console.print(f"  Interval: {config.github.poll_interval}s")
-    console.print(f"  Label:    {config.labels.ready}")
+    console.print(f"  Labels:   {config.labels.ready}, {config.labels.revise}")
     console.print()
 
     def dispatch(run: Run) -> None:

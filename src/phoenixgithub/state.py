@@ -49,6 +49,12 @@ class StateManager:
         self.save_watcher_state()
 
     def mark_run_finished(self, run_id: str) -> None:
+        # Release any issue dispatch locks owned by this run so a relabel to
+        # ai:ready can be picked up again in future polling cycles.
+        stale_keys = [k for k, v in self._watcher.dispatched.items() if v == run_id]
+        for key in stale_keys:
+            self._watcher.dispatched.pop(key, None)
+
         self._watcher.active_runs = max(0, self._watcher.active_runs - 1)
         self.save_watcher_state()
 

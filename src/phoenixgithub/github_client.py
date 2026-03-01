@@ -34,16 +34,25 @@ class GitHubClient:
 
     def get_ready_issues(self) -> list[Issue]:
         """Find all open issues with the ai:ready label."""
-        try:
-            label = self._repo.get_label(self._labels.ready)
-        except GithubException:
-            logger.warning(f"Label '{self._labels.ready}' not found in repo — creating it")
-            self._ensure_labels()
-            label = self._repo.get_label(self._labels.ready)
-
-        issues = list(self._repo.get_issues(state="open", labels=[label]))
+        issues = self._get_issues_by_label(self._labels.ready)
         logger.info(f"Found {len(issues)} issues with label '{self._labels.ready}'")
         return issues
+
+    def get_revise_issues(self) -> list[Issue]:
+        """Find all open issues with the ai:revise label."""
+        issues = self._get_issues_by_label(self._labels.revise)
+        logger.info(f"Found {len(issues)} issues with label '{self._labels.revise}'")
+        return issues
+
+    def _get_issues_by_label(self, label_name: str) -> list[Issue]:
+        """Find all open issues with a specific label, ensuring labels exist."""
+        try:
+            label = self._repo.get_label(label_name)
+        except GithubException:
+            logger.warning(f"Label '{label_name}' not found in repo — creating it")
+            self._ensure_labels()
+            label = self._repo.get_label(label_name)
+        return list(self._repo.get_issues(state="open", labels=[label]))
 
     def transition_label(self, issue_number: int, from_label: str, to_label: str) -> None:
         """Remove one label, add another — state machine transition."""
@@ -63,6 +72,10 @@ class GitHubClient:
 
     def get_issue(self, issue_number: int) -> Issue:
         return self._repo.get_issue(issue_number)
+
+    def ensure_labels(self) -> None:
+        """Public helper to ensure AI workflow labels exist."""
+        self._ensure_labels()
 
     def _ensure_labels(self) -> None:
         """Create all AI labels if they don't exist."""

@@ -38,6 +38,10 @@ Rules:
 - Add appropriate imports.
 - Do NOT add unnecessary comments explaining the change.
 - Handle edge cases.
+- Avoid creating duplicate test module names across directories (for example,
+  do not create two files both named test_foo.py in different folders).
+- Reuse the existing project layout; do not create new top-level package
+  directories unless the issue explicitly requires restructuring.
 - Respond ONLY with the JSON object, no markdown fences."""
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:

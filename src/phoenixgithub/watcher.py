@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from github.Issue import Issue
+
 from phoenixgithub.config import Config
 from phoenixgithub.github_client import GitHubClient
 from phoenixgithub.models import Run, RunStatus
@@ -43,9 +45,18 @@ class Watcher:
             return dispatched_runs
 
         ready_issues = self.github.get_ready_issues()
+        revise_issues = self.github.get_revise_issues()
 
+        # ai:revise is a first-class trigger; dedupe if an issue has both labels.
+        triggers: dict[int, tuple[Issue, str]] = {}
         for issue in ready_issues:
+            triggers[issue.number] = (issue, self.config.labels.ready)
+        for issue in revise_issues:
+            triggers.setdefault(issue.number, (issue, self.config.labels.revise))
+
+        for issue, from_label in triggers.values():
             if self.state.is_dispatched(issue.number):
+                logger.info(f"Issue #{issue.number} already dispatched — skipping")
                 continue
 
             run = Run(
@@ -59,7 +70,7 @@ class Watcher:
 
             self.github.transition_label(
                 issue.number,
-                self.config.labels.ready,
+                from_label,
                 self.config.labels.in_progress,
             )
             self.github.comment_on_issue(
@@ -67,6 +78,7 @@ class Watcher:
                 f"🤖 **Phoenix AI** picked up this issue.\n\n"
                 f"**Run ID:** `{run.run_id}`\n"
                 f"**Branch:** `{run.branch_name}`\n\n"
+                f"Triggered by label: `{from_label}`\n\n"
                 f"Working on it now...",
             )
 
@@ -88,7 +100,8 @@ class Watcher:
 
         logger.info(
             f"Watcher started — polling {self.config.github.repo} "
-            f"every {interval}s for '{self.config.labels.ready}' issues"
+            f"every {interval}s for '{self.config.labels.ready}' and "
+            f"'{self.config.labels.revise}' issues"
         )
 
         while self._running:

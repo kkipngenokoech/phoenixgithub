@@ -47,7 +47,9 @@ class LLMConfig(BaseModel):
 
 class AgentConfig(BaseModel):
     max_retries: int = 2
-    test_command: str = Field(default_factory=lambda: os.getenv("TEST_COMMAND", "pytest"))
+    test_command: str = Field(
+        default_factory=lambda: os.getenv("TEST_COMMAND", "pytest --import-mode=importlib")
+    )
     build_command: str = Field(default_factory=lambda: os.getenv("BUILD_COMMAND", ""))
 
 

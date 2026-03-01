@@ -36,7 +36,7 @@ Respond with valid JSON:
 
 Respond ONLY with the JSON object, no markdown fences."""
 
-    def __init__(self, llm, test_command: str = "pytest") -> None:
+    def __init__(self, llm, test_command: str = "pytest --import-mode=importlib") -> None:
         super().__init__(llm)
         self.test_command = test_command
 
