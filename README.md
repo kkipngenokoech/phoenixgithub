@@ -166,6 +166,7 @@ src/phoenixgithub/
   watcher.py        # polling and dispatch
   state.py          # local run and watcher state
   agents/           # planner/coder/tester/pr/failure analyst
+  tools/            # shared helper utilities (git/path/runtime helpers)
 scripts/
   pre_release.py                    # local release checks
   create_labels.py                  # create/ensure AI labels in target repo
@@ -178,6 +179,15 @@ docs/
 INTERNAL_README.md                  # internal architecture and operations guide
 RELEASING.md                        # release runbook
 ```
+
+## Internal Tools Package
+
+PhoenixGitHub includes reusable runtime helpers under `src/phoenixgithub/tools/`:
+
+- `git_utils.py`: default-branch detection, changed-path parsing, uncovered-path coverage checks.
+- `path_utils.py`: image URL detection, image extension inference, image URL extraction from issue/comment text.
+
+These helpers are used by `github_client.py` to keep the core client focused on orchestration/API behavior.
 
 ## Maintainer Documentation
 

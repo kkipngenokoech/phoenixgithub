@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -18,13 +17,14 @@ from git import Repo
 from git.exc import GitCommandError
 
 from phoenixgithub.config import Config, LabelConfig
+from phoenixgithub.tools.git_utils import (
+    compute_uncovered_paths,
+    get_changed_paths,
+    get_default_branch,
+)
+from phoenixgithub.tools.path_utils import extract_image_urls_from_texts, infer_image_extension
 
 logger = logging.getLogger(__name__)
-
-IMAGE_URL_RE = re.compile(
-    r"!\[[^\]]*]\((?P<md>https?://[^)\s]+)\)|(?P<raw>https?://[^\s)]+)",
-    re.IGNORECASE,
-)
 
 
 class GitHubClient:
@@ -129,22 +129,7 @@ class GitHubClient:
         texts: list[str] = [issue.body or ""]
         for comment in issue.get_comments():
             texts.append(comment.body or "")
-
-        urls: list[str] = []
-        seen: set[str] = set()
-        for text in texts:
-            for match in IMAGE_URL_RE.finditer(text):
-                candidate = match.group("md") or match.group("raw")
-                if not candidate:
-                    continue
-                url = candidate.strip()
-                if not self._looks_like_image_url(url):
-                    continue
-                if url in seen:
-                    continue
-                seen.add(url)
-                urls.append(url)
-        return urls
+        return extract_image_urls_from_texts(texts)
 
     def download_issue_images(self, image_urls: list[str], target_dir: str, limit: int = 6) -> list[str]:
         """Download issue images locally for vision analysis."""
@@ -165,7 +150,7 @@ class GitHubClient:
                     logger.warning(f"Could not download image {url}: HTTP {resp.status_code}")
                     continue
 
-                ext = self._infer_image_extension(url, resp.headers.get("content-type", ""))
+                ext = infer_image_extension(url, resp.headers.get("content-type", ""))
                 path = out_dir / f"issue_image_{idx}{ext}"
                 path.write_bytes(resp.content)
                 saved.append(str(path))
@@ -227,7 +212,7 @@ class GitHubClient:
     def create_branch(self, clone_path: str, branch_name: str, *, full_reset: bool = True) -> Repo:
         """Recreate and checkout a feature branch from the latest default branch."""
         repo = Repo(clone_path)
-        default_branch = self._get_default_branch(repo)
+        default_branch = get_default_branch(repo)
         if full_reset:
             repo.git.checkout(default_branch)
             repo.git.pull("origin", default_branch)
@@ -265,10 +250,10 @@ class GitHubClient:
     ) -> str:
         """Stage files, commit, push to remote. Returns commit SHA."""
         repo = Repo(clone_path)
-        changed_paths = self._get_changed_paths(repo)
+        changed_paths = get_changed_paths(repo)
         if files:
             requested = {f.strip().rstrip("/") for f in files if f and f.strip()}
-            omitted = sorted(self._compute_uncovered_paths(changed_paths, requested))
+            omitted = sorted(compute_uncovered_paths(changed_paths, requested))
             if omitted:
                 preview = ", ".join(omitted[:8])
                 suffix = " ..." if len(omitted) > 8 else ""
@@ -346,73 +331,4 @@ class GitHubClient:
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _get_default_branch(repo: Repo) -> str:
-        branches = [b.name for b in repo.branches]
-        for candidate in ("main", "master"):
-            if candidate in branches:
-                return candidate
-        return branches[0] if branches else "main"
 
-    @staticmethod
-    def _looks_like_image_url(url: str) -> bool:
-        lower = url.lower()
-        return (
-            any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
-            or "githubusercontent.com" in lower
-            or "/assets/" in lower
-        )
-
-    @staticmethod
-    def _infer_image_extension(url: str, content_type: str) -> str:
-        lower_url = url.lower()
-        for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
-            if lower_url.endswith(ext):
-                return ext
-        ct = content_type.lower()
-        if "jpeg" in ct or "jpg" in ct:
-            return ".jpg"
-        if "gif" in ct:
-            return ".gif"
-        if "webp" in ct:
-            return ".webp"
-        if "bmp" in ct:
-            return ".bmp"
-        if "svg" in ct:
-            return ".svg"
-        return ".png"
-
-    @staticmethod
-    def _get_changed_paths(repo: Repo) -> set[str]:
-        """Collect changed paths from git porcelain status."""
-        try:
-            porcelain = repo.git.status("--porcelain")
-        except Exception:
-            return set()
-
-        paths: set[str] = set()
-        for line in porcelain.splitlines():
-            if len(line) < 4:
-                continue
-            raw = line[3:].strip()
-            if " -> " in raw:
-                # For renames/copies, include destination path.
-                raw = raw.split(" -> ", 1)[1].strip()
-            if raw:
-                paths.add(raw)
-        return paths
-
-    @staticmethod
-    def _compute_uncovered_paths(changed_paths: set[str], requested_paths: set[str]) -> set[str]:
-        """Return changed paths that are not covered by requested commit paths."""
-        uncovered: set[str] = set()
-        for path in changed_paths:
-            normalized = path.rstrip("/")
-            if normalized in requested_paths:
-                continue
-            # If git reports an untracked dir (e.g. "css/"), treat as covered
-            # when at least one requested file is under that directory.
-            if path.endswith("/") and any(req.startswith(normalized + "/") for req in requested_paths):
-                continue
-            uncovered.add(path)
-        return uncovered

@@ -21,6 +21,7 @@ Core modules:
 - `src/phoenixgithub/github_client.py`: GitHub API + git operations.
 - `src/phoenixgithub/state.py`: local state and run persistence.
 - `src/phoenixgithub/agents/*`: planner/coder/tester/pr/failure analyst.
+- `src/phoenixgithub/tools/*`: reusable helper utilities shared by runtime modules.
 - `src/phoenixgithub/cli.py`: CLI entry points.
 
 ## 2. Label State Machine
@@ -95,6 +96,7 @@ src/phoenixgithub/
   orchestrator.py
   state.py
   agents/
+  tools/
 scripts/
   create_labels.py
   install_merge_done_workflow.py
@@ -103,6 +105,24 @@ scripts/
 .github/workflows/
   publish-pypi.yml
 ```
+
+## 6.1 Tools Package (`src/phoenixgithub/tools`)
+
+Current modules:
+
+- `git_utils.py`
+  - `get_default_branch(repo)`
+  - `get_changed_paths(repo)`
+  - `compute_uncovered_paths(changed_paths, requested_paths)`
+- `path_utils.py`
+  - `looks_like_image_url(url)`
+  - `infer_image_extension(url, content_type)`
+  - `extract_image_urls_from_texts(texts)`
+
+Usage:
+
+- `github_client.py` imports these helpers directly.
+- Keep these modules side-effect free and easy to unit test.
 
 ## 7. Configuration and Environment
 

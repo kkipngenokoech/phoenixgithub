@@ -13,3 +13,4 @@ This directory centralizes project documentation by audience and purpose.
 - New users: start at `../README.md`.
 - Maintainers/operators: read `../INTERNAL_README.md`.
 - Release managers: follow `../RELEASING.md`.
+- Runtime helper internals: see `src/phoenixgithub/tools/`.
