@@ -5,9 +5,29 @@ This document is for maintainers publishing `phoenixgithub` to PyPI.
 ## Prerequisites
 
 - PyPI account with permission to publish the package
-- PyPI API token (recommended) for `__token__`
 - Clean git working tree
 - Local environment with Python `3.11+`
+
+## GitHub release automation
+
+This repository includes `.github/workflows/publish-pypi.yml` to publish from GitHub Actions using PyPI Trusted Publishing (OIDC).
+
+### One-time setup
+
+1. In PyPI account settings, add a Trusted Publisher (or Pending Publisher) for this GitHub workflow:
+   - Project name: `phoenixgithub`
+   - Owner: your GitHub username or org
+   - Repository: this repository name
+   - Workflow file: `publish-pypi.yml`
+2. Ensure package name on PyPI is `phoenixgithub`.
+3. Ensure `version` in `pyproject.toml` is bumped for each release.
+
+### Triggering publish from GitHub
+
+- Recommended: create a GitHub Release (`published`) for the new version tag.
+- Optional: run the `Publish to PyPI` workflow manually from Actions (`workflow_dispatch`).
+
+The workflow builds distributions, runs `twine check`, then uploads to PyPI via OIDC.
 
 Install release tooling:
 
