@@ -167,7 +167,16 @@ src/phoenixgithub/
   state.py          # local run and watcher state
   agents/           # planner/coder/tester/pr/failure analyst
 scripts/
-  pre_release.py    # local release checks
+  pre_release.py                    # local release checks
+  create_labels.py                  # create/ensure AI labels in target repo
+  install_merge_done_workflow.py    # install merge->ai:done workflow
+  reset_repo_state.py               # clear local run/clone state for current repo
+.github/workflows/
+  publish-pypi.yml                  # GitHub Release -> PyPI publish (OIDC)
+docs/
+  README.md                         # docs index
+INTERNAL_README.md                  # internal architecture and operations guide
+RELEASING.md                        # release runbook
 ```
 
 ## Maintainer Documentation
