@@ -153,3 +153,5 @@ src/phoenixgithub/
 ## Maintainer Docs
 
 Release and package publishing instructions live in `RELEASING.md`.
+Internal operations and architecture runbook lives in `INTERNAL_README.md`.
+Documentation index lives in `docs/README.md`.

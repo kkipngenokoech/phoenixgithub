@@ -29,6 +29,45 @@ This repository includes `.github/workflows/publish-pypi.yml` to publish from Gi
 
 The workflow builds distributions, runs `twine check`, then uploads to PyPI via OIDC.
 
+### Local pre-release script
+
+Run all local checks in one command before creating a GitHub Release:
+
+```bash
+make pre-release
+```
+
+With expected tag/version match:
+
+```bash
+make pre-release TAG=v0.1.0
+```
+
+This checks:
+
+- Clean git working tree
+- `pyproject.toml` version consistency (when `TAG=` is provided)
+- Fresh `dist/` build
+- `twine check dist/*`
+
+### One-command GitHub release
+
+Create and publish a GitHub Release (which triggers PyPI publish workflow):
+
+```bash
+make release TAG=v0.1.0
+```
+
+Optional custom release notes:
+
+```bash
+make release TAG=v0.1.0 NOTES="PhoenixGitHub 0.1.0"
+```
+
+Requirements:
+
+- `gh` CLI installed and authenticated (`gh auth login`)
+
 Install release tooling:
 
 ```bash

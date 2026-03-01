@@ -1,4 +1,4 @@
-.PHONY: install status watch run-issue labels setup-actions reset-state clean-repo-state clean-workspace-all onboard
+.PHONY: install status watch run-issue labels setup-actions reset-state clean-repo-state clean-workspace-all onboard pre-release release
 PYTHON ?= .venv/bin/python
 
 install:
@@ -43,3 +43,23 @@ onboard:
 	@$(PYTHON) scripts/install_merge_done_workflow.py
 	@phoenixgithub status
 	@echo "Onboarding complete. Next: make watch"
+
+pre-release:
+	@$(PYTHON) scripts/pre_release.py $(if $(TAG),--tag $(TAG),)
+
+release:
+	@if [ -z "$(TAG)" ]; then \
+		echo "Usage: make release TAG=vX.Y.Z [NOTES='Release notes text']"; \
+		exit 1; \
+	fi
+	@command -v gh >/dev/null 2>&1 || { \
+		echo "GitHub CLI (gh) is required. Install from https://cli.github.com/"; \
+		exit 1; \
+	}
+	@gh auth status >/dev/null 2>&1 || { \
+		echo "GitHub CLI is not authenticated. Run: gh auth login"; \
+		exit 1; \
+	}
+	@$(MAKE) pre-release TAG="$(TAG)"
+	@gh release create "$(TAG)" --title "$(TAG)" $(if $(NOTES),--notes "$(NOTES)",--generate-notes)
+	@echo "Release $(TAG) created. GitHub Actions will publish to PyPI."

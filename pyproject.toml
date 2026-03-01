@@ -4,8 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phoenixgithub"
-version = "0.1.0"
+version = "0.1.1"
 description = "Always-on AI agent that picks up GitHub issues, implements them, and creates PRs for human review."
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "langchain>=0.3",
