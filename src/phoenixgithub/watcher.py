@@ -64,6 +64,7 @@ class Watcher:
                 issues=[issue.number],
                 branch_name=f"phoenix/issue-{issue.number}",
             )
+            run.context["trigger_label"] = from_label
 
             self.state.mark_dispatched(issue.number, run.run_id)
             self.state.save_run(run)

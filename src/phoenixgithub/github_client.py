@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
 
+import requests
 from github import Github, GithubException
 from github.Issue import Issue
+from github.IssueComment import IssueComment
 from github.PullRequest import PullRequest
 from github.Repository import Repository
 from git import Repo
@@ -17,6 +20,11 @@ from git.exc import GitCommandError
 from phoenixgithub.config import Config, LabelConfig
 
 logger = logging.getLogger(__name__)
+
+IMAGE_URL_RE = re.compile(
+    r"!\[[^\]]*]\((?P<md>https?://[^)\s]+)\)|(?P<raw>https?://[^\s)]+)",
+    re.IGNORECASE,
+)
 
 
 class GitHubClient:
@@ -55,13 +63,31 @@ class GitHubClient:
         return list(self._repo.get_issues(state="open", labels=[label]))
 
     def transition_label(self, issue_number: int, from_label: str, to_label: str) -> None:
-        """Remove one label, add another — state machine transition."""
+        """Set a single AI state label, clearing all other AI state labels."""
         issue = self._repo.get_issue(issue_number)
-        try:
-            issue.remove_from_labels(from_label)
-        except GithubException:
-            pass
-        issue.add_to_labels(to_label)
+        ai_state_labels = {
+            self._labels.ready,
+            self._labels.in_progress,
+            self._labels.review,
+            self._labels.revise,
+            self._labels.done,
+            self._labels.failed,
+        }
+        existing_ai_labels = [label.name for label in issue.get_labels() if label.name in ai_state_labels]
+
+        # Remove any conflicting AI state labels first.
+        for label_name in existing_ai_labels:
+            if label_name == to_label:
+                continue
+            try:
+                issue.remove_from_labels(label_name)
+            except GithubException:
+                logger.debug(f"Issue #{issue_number}: could not remove label {label_name}")
+
+        # Ensure target label is present.
+        if to_label not in existing_ai_labels:
+            issue.add_to_labels(to_label)
+
         logger.info(f"Issue #{issue_number}: {from_label} → {to_label}")
 
     def add_label(self, issue_number: int, label: str) -> None:
@@ -70,8 +96,83 @@ class GitHubClient:
     def comment_on_issue(self, issue_number: int, body: str) -> None:
         self._repo.get_issue(issue_number).create_comment(body)
 
+    def get_issue_comments(self, issue_number: int, limit: int = 30) -> list[dict[str, str]]:
+        """Return recent issue comments with author metadata."""
+        issue = self._repo.get_issue(issue_number)
+        comments = list(issue.get_comments())
+        selected = comments[-limit:] if limit > 0 else comments
+        out: list[dict[str, str]] = []
+        for c in selected:
+            comment: IssueComment = c
+            out.append(
+                {
+                    "author": getattr(comment.user, "login", "unknown") or "unknown",
+                    "body": comment.body or "",
+                }
+            )
+        return out
+
+    def count_issue_comments_containing(self, issue_number: int, token: str) -> int:
+        issue = self._repo.get_issue(issue_number)
+        count = 0
+        for comment in issue.get_comments():
+            if token in (comment.body or ""):
+                count += 1
+        return count
+
     def get_issue(self, issue_number: int) -> Issue:
         return self._repo.get_issue(issue_number)
+
+    def get_issue_image_urls(self, issue_number: int) -> list[str]:
+        """Extract image URLs from the issue body and comments."""
+        issue = self._repo.get_issue(issue_number)
+        texts: list[str] = [issue.body or ""]
+        for comment in issue.get_comments():
+            texts.append(comment.body or "")
+
+        urls: list[str] = []
+        seen: set[str] = set()
+        for text in texts:
+            for match in IMAGE_URL_RE.finditer(text):
+                candidate = match.group("md") or match.group("raw")
+                if not candidate:
+                    continue
+                url = candidate.strip()
+                if not self._looks_like_image_url(url):
+                    continue
+                if url in seen:
+                    continue
+                seen.add(url)
+                urls.append(url)
+        return urls
+
+    def download_issue_images(self, image_urls: list[str], target_dir: str, limit: int = 6) -> list[str]:
+        """Download issue images locally for vision analysis."""
+        if not image_urls:
+            return []
+
+        out_dir = Path(target_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        saved: list[str] = []
+        headers = {"Authorization": f"Bearer {self.config.github.token}"}
+
+        for idx, url in enumerate(image_urls[:limit], start=1):
+            try:
+                resp = requests.get(url, headers=headers, timeout=20)
+                if resp.status_code >= 400:
+                    resp = requests.get(url, timeout=20)
+                if resp.status_code >= 400:
+                    logger.warning(f"Could not download image {url}: HTTP {resp.status_code}")
+                    continue
+
+                ext = self._infer_image_extension(url, resp.headers.get("content-type", ""))
+                path = out_dir / f"issue_image_{idx}{ext}"
+                path.write_bytes(resp.content)
+                saved.append(str(path))
+            except Exception as e:
+                logger.warning(f"Failed to download image {url}: {e}")
+
+        return saved
 
     def ensure_labels(self) -> None:
         """Public helper to ensure AI workflow labels exist."""
@@ -97,17 +198,24 @@ class GitHubClient:
     # Clone & Branch
     # ------------------------------------------------------------------
 
-    def ensure_clone(self, workspace_dir: str) -> str:
+    def ensure_clone(self, workspace_dir: str, *, full_reset: bool = True) -> str:
         """Clone the repo into workspace if not already cloned. Returns path to clone."""
         clone_path = Path(workspace_dir) / self.config.github.repo_name
         if clone_path.exists() and (clone_path / ".git").exists():
             repo = Repo(str(clone_path))
-            logger.info(f"Pulling latest on {repo.active_branch.name}...")
-            try:
-                repo.git.checkout("main")
-            except GitCommandError:
-                repo.git.checkout("master")
-            repo.git.pull("origin")
+            if full_reset:
+                logger.info(f"Pulling latest on {repo.active_branch.name}...")
+                try:
+                    repo.git.checkout("main")
+                except GitCommandError:
+                    repo.git.checkout("master")
+                repo.git.pull("origin")
+                # Runs can leave untracked files behind after failed attempts.
+                # Keep the local workspace deterministic before planning starts.
+                repo.git.reset("--hard")
+                repo.git.clean("-fd")
+            else:
+                logger.info("Reusing existing clone/worktree for incremental revise")
             return str(clone_path)
 
         clone_path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,19 +224,40 @@ class GitHubClient:
         logger.info(f"Cloned {self.config.github.repo} → {clone_path}")
         return str(clone_path)
 
-    def create_branch(self, clone_path: str, branch_name: str) -> Repo:
-        """Create and checkout a feature branch from the latest main."""
+    def create_branch(self, clone_path: str, branch_name: str, *, full_reset: bool = True) -> Repo:
+        """Recreate and checkout a feature branch from the latest default branch."""
         repo = Repo(clone_path)
         default_branch = self._get_default_branch(repo)
-        repo.git.checkout(default_branch)
-        repo.git.pull("origin", default_branch)
+        if full_reset:
+            repo.git.checkout(default_branch)
+            repo.git.pull("origin", default_branch)
+            repo.git.reset("--hard", f"origin/{default_branch}")
+            repo.git.clean("-fd")
 
-        if branch_name in [b.name for b in repo.branches]:
-            repo.git.checkout(branch_name)
-            logger.info(f"Switched to existing branch: {branch_name}")
-        else:
+            if branch_name in [b.name for b in repo.branches]:
+                repo.git.branch("-D", branch_name)
+                logger.info(f"Reset local branch: {branch_name}")
+
+            # Ensure reruns start from a clean remote branch tip as well.
+            try:
+                repo.git.push("origin", f":{branch_name}")
+                logger.info(f"Deleted remote branch (if existed): {branch_name}")
+            except GitCommandError:
+                logger.info(f"Remote branch did not exist (or could not be deleted): {branch_name}")
+
             repo.git.checkout("-b", branch_name)
             logger.info(f"Created branch: {branch_name}")
+            return repo
+
+        # Incremental revise mode: keep current issue branch history/worktree.
+        if branch_name in [b.name for b in repo.branches]:
+            repo.git.checkout(branch_name)
+            logger.info(f"Reusing existing branch for revise: {branch_name}")
+        else:
+            repo.git.checkout(default_branch)
+            repo.git.pull("origin", default_branch)
+            repo.git.checkout("-b", branch_name)
+            logger.info(f"Created branch for revise: {branch_name}")
         return repo
 
     def commit_and_push(
@@ -136,9 +265,25 @@ class GitHubClient:
     ) -> str:
         """Stage files, commit, push to remote. Returns commit SHA."""
         repo = Repo(clone_path)
+        changed_paths = self._get_changed_paths(repo)
         if files:
+            requested = {f.strip().rstrip("/") for f in files if f and f.strip()}
+            omitted = sorted(self._compute_uncovered_paths(changed_paths, requested))
+            if omitted:
+                preview = ", ".join(omitted[:8])
+                suffix = " ..." if len(omitted) > 8 else ""
+                logger.warning(
+                    "Some changed files were not in applied_files; auto-staging them: "
+                    f"{preview}{suffix}"
+                )
             for f in files:
                 repo.git.add(f)
+            # Auto-stage uncovered changed paths to avoid losing files that were
+            # modified/created in earlier attempts but omitted from applied_files.
+            for path in omitted:
+                if path.endswith("/"):
+                    continue
+                repo.git.add(path)
         else:
             repo.git.add("-A")
 
@@ -169,12 +314,27 @@ class GitHubClient:
         full_body = f"{body}\n\n---\n{closes_refs}"
 
         default = self._repo.default_branch
-        pr = self._repo.create_pull(
-            title=title,
-            body=full_body,
-            head=branch_name,
-            base=default,
-        )
+        try:
+            pr = self._repo.create_pull(
+                title=title,
+                body=full_body,
+                head=branch_name,
+                base=default,
+            )
+        except GithubException as exc:
+            # In revise mode we may push to an existing issue branch that already
+            # has an open PR. Reuse it instead of failing the run.
+            message = str(exc)
+            if exc.status == 422 and "already exists" in message.lower():
+                owner_head = f"{self.config.github.owner}:{branch_name}"
+                existing = list(self._repo.get_pulls(state="open", head=owner_head, base=default))
+                if existing:
+                    pr = existing[0]
+                    logger.info(f"Reusing existing PR #{pr.number}: {pr.html_url}")
+                else:
+                    raise
+            else:
+                raise
 
         if labels:
             pr.add_to_labels(*labels)
@@ -193,3 +353,66 @@ class GitHubClient:
             if candidate in branches:
                 return candidate
         return branches[0] if branches else "main"
+
+    @staticmethod
+    def _looks_like_image_url(url: str) -> bool:
+        lower = url.lower()
+        return (
+            any(lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
+            or "githubusercontent.com" in lower
+            or "/assets/" in lower
+        )
+
+    @staticmethod
+    def _infer_image_extension(url: str, content_type: str) -> str:
+        lower_url = url.lower()
+        for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
+            if lower_url.endswith(ext):
+                return ext
+        ct = content_type.lower()
+        if "jpeg" in ct or "jpg" in ct:
+            return ".jpg"
+        if "gif" in ct:
+            return ".gif"
+        if "webp" in ct:
+            return ".webp"
+        if "bmp" in ct:
+            return ".bmp"
+        if "svg" in ct:
+            return ".svg"
+        return ".png"
+
+    @staticmethod
+    def _get_changed_paths(repo: Repo) -> set[str]:
+        """Collect changed paths from git porcelain status."""
+        try:
+            porcelain = repo.git.status("--porcelain")
+        except Exception:
+            return set()
+
+        paths: set[str] = set()
+        for line in porcelain.splitlines():
+            if len(line) < 4:
+                continue
+            raw = line[3:].strip()
+            if " -> " in raw:
+                # For renames/copies, include destination path.
+                raw = raw.split(" -> ", 1)[1].strip()
+            if raw:
+                paths.add(raw)
+        return paths
+
+    @staticmethod
+    def _compute_uncovered_paths(changed_paths: set[str], requested_paths: set[str]) -> set[str]:
+        """Return changed paths that are not covered by requested commit paths."""
+        uncovered: set[str] = set()
+        for path in changed_paths:
+            normalized = path.rstrip("/")
+            if normalized in requested_paths:
+                continue
+            # If git reports an untracked dir (e.g. "css/"), treat as covered
+            # when at least one requested file is under that directory.
+            if path.endswith("/") and any(req.startswith(normalized + "/") for req in requested_paths):
+                continue
+            uncovered.add(path)
+        return uncovered

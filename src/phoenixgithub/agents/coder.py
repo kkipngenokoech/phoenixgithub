@@ -42,6 +42,8 @@ Rules:
   do not create two files both named test_foo.py in different folders).
 - Reuse the existing project layout; do not create new top-level package
   directories unless the issue explicitly requires restructuring.
+- For every newly created folder, also create/update a comprehensive
+  `README.md` inside that folder (include purpose, structure, and usage/testing).
 - Respond ONLY with the JSON object, no markdown fences."""
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +51,10 @@ Rules:
         plan = context["plan"]
         issue_title = context["issue_title"]
         issue_body = context["issue_body"]
+        visual_context = context.get("visual_context", "")
+        auto_guidance = context.get("auto_guidance", "")
+        revision_notes = context.get("revision_notes", "")
+        trigger_label = context.get("trigger_label", "")
 
         # If we have feedback from a failed verify-reject-retry, include it
         verify_feedback = context.get("verify_feedback", "")
@@ -66,41 +72,154 @@ Rules:
             f"## Task\n"
             f"**Issue:** {issue_title}\n"
             f"**Description:** {issue_body}\n\n"
+            f"## Trigger Context\n"
+            f"Trigger label: {trigger_label}\n"
+            f"{'Revise mode: apply minimal targeted fixes only.' if trigger_label == 'ai:revise' else ''}\n\n"
+            f"## Revision Directives\n"
+            f"{revision_notes or '(none)'}\n\n"
+            f"## Screenshot-Derived Context\n"
+            f"{visual_context or '(none)'}\n\n"
+            f"## Automatic Retry Guidance\n"
+            f"{auto_guidance or '(none)'}\n\n"
             f"## Implementation Plan\n```json\n{json.dumps(plan, indent=2)}\n```\n\n"
             f"## Current File Contents\n{files_context}"
             f"{feedback_section}\n\n"
             f"Produce the file changes as JSON."
         )
 
-        raw = self.invoke(prompt)
+        trace_meta = {
+            "agent": self.role,
+            "run_id": context.get("run_id"),
+            "issue_number": context.get("issue_number"),
+            "repo": context.get("repo"),
+            "branch_name": context.get("branch_name"),
+            "step": "implement",
+            "attempt": context.get("step_attempt"),
+        }
+        repo_tag = str(context.get("repo", "unknown")).replace("/", "__")
+        issue_tag = f"issue:{context.get('issue_number', 'unknown')}"
+        run_tag = f"run:{context.get('run_id', 'unknown')}"
+        attempt_tag = f"attempt:{context.get('step_attempt', 'unknown')}"
+        raw = self.invoke(
+            prompt,
+            trace_name="coder.implement",
+            trace_tags=["phoenixgithub", "coder", "implement", f"repo:{repo_tag}", issue_tag, run_tag, attempt_tag],
+            trace_metadata=trace_meta,
+        )
         logger.info(f"Coder response length: {len(raw)} chars")
 
-        try:
-            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-        except json.JSONDecodeError:
-            logger.error(f"Coder returned invalid JSON:\n{raw[:500]}")
-            return {"changes": [], "commit_message": "failed to parse coder output", "error": raw[:500]}
+        result = self._parse_coder_json(raw)
+        if result is None:
+            logger.warning("Coder returned invalid JSON — requesting one repair pass")
+            repair_prompt = (
+                "Your previous response was invalid JSON for the required schema.\n"
+                "Rewrite it as valid JSON only, with no markdown fences and no extra text.\n\n"
+                "Required schema:\n"
+                "{\n"
+                '  "changes": [{"file_path": "relative/path.py", "action": "modify|create", "content": "..." }],\n'
+                '  "commit_message": "feat: concise description"\n'
+                "}\n\n"
+                f"Previous invalid output:\n{raw[:20000]}"
+            )
+            repaired_raw = self.invoke(
+                repair_prompt,
+                trace_name="coder.repair_json",
+                trace_tags=["phoenixgithub", "coder", "repair", f"repo:{repo_tag}", issue_tag, run_tag, attempt_tag],
+                trace_metadata=trace_meta,
+            )
+            logger.info(f"Coder repair response length: {len(repaired_raw)} chars")
+            result = self._parse_coder_json(repaired_raw)
+
+        if result is None:
+            logger.error(f"Coder returned invalid JSON after repair:\n{raw[:500]}")
+            return {"changes": [], "commit_message": "failed to parse coder output", "error": raw[:1000]}
 
         # Apply changes to disk
         changes = result.get("changes", [])
         applied: list[str] = []
+        repo_root = Path(clone_path).resolve()
+        created_dirs: set[Path] = set()
+
+        def _new_ancestor_dirs(path: Path) -> list[Path]:
+            missing: list[Path] = []
+            current = path
+            while current != repo_root and not current.exists():
+                missing.append(current)
+                current = current.parent
+            return missing
+
         for change in changes:
             file_path = change.get("file_path", "")
             content = change.get("content", "")
             if not file_path or not content:
                 continue
 
-            full_path = Path(clone_path) / file_path
+            full_path = (repo_root / file_path).resolve()
+            try:
+                full_path.relative_to(repo_root)
+            except ValueError:
+                logger.warning(f"Skipped unsafe file path outside repo root: {file_path}")
+                continue
+
+            for d in _new_ancestor_dirs(full_path.parent):
+                created_dirs.add(d)
+
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
             applied.append(file_path)
             logger.info(f"Wrote: {file_path} ({len(content)} chars)")
+
+        readme_violations: list[str] = []
+        for folder in sorted(created_dirs):
+            readme_path = folder / "README.md"
+            if not readme_path.exists():
+                readme_violations.append(f"{folder.relative_to(repo_root)} (missing README.md)")
+                continue
+            readme_len = len(readme_path.read_text(errors="replace").strip())
+            if readme_len < 200:
+                readme_violations.append(
+                    f"{folder.relative_to(repo_root)} (README.md too short: {readme_len} chars)"
+                )
+
+        if readme_violations:
+            raise ValueError(
+                "README guardrail violation for newly created folder(s): "
+                + "; ".join(readme_violations)
+            )
 
         return {
             "changes": changes,
             "applied_files": applied,
             "commit_message": result.get("commit_message", f"feat: implement #{context.get('issue_number', '?')}"),
         }
+
+    def _parse_coder_json(self, raw: str) -> dict[str, Any] | None:
+        candidates: list[str] = []
+        text = raw.strip()
+        candidates.append(text)
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
+                candidates.append("\n".join(lines[1:-1]).strip())
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidates.append(text[start : end + 1].strip())
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        return None
 
     def _read_files_for_plan(self, clone_path: str, plan: dict) -> str:
         """Read files referenced in the plan so the coder has full context."""

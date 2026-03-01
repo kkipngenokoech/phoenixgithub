@@ -50,7 +50,24 @@ Rules:
             f"Write the PR title and body as JSON."
         )
 
-        raw = self.invoke(prompt)
+        repo_tag = str(context.get("repo", "unknown")).replace("/", "__")
+        issue_tag = f"issue:{issue_number}"
+        run_tag = f"run:{context.get('run_id', 'unknown')}"
+        raw = self.invoke(
+            prompt,
+            trace_name="pr_agent.compose",
+            trace_tags=["phoenixgithub", "pr", "compose", f"repo:{repo_tag}", issue_tag, run_tag],
+            trace_metadata={
+                "agent": self.role,
+                "run_id": context.get("run_id"),
+                "issue_number": issue_number,
+                "repo": context.get("repo"),
+                "branch_name": context.get("branch_name"),
+                "step": "pr",
+                "commit_sha": context.get("commit_sha"),
+                "changed_files_count": len(applied_files),
+            },
+        )
 
         try:
             pr_info = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
