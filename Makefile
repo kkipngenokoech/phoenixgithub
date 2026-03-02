@@ -1,4 +1,4 @@
-.PHONY: install status watch run-issue labels setup-actions reset-state clean-repo-state clean-workspace-all onboard pre-release release
+.PHONY: install status watch run-issue labels setup-actions reset-state clean-repo-state clean-workspace-all onboard pre-release release slides
 PYTHON ?= .venv/bin/python
 
 install:
@@ -63,3 +63,6 @@ release:
 	@$(MAKE) pre-release TAG="$(TAG)"
 	@gh release create "$(TAG)" --title "$(TAG)" $(if $(NOTES),--notes "$(NOTES)",--generate-notes)
 	@echo "Release $(TAG) created. GitHub Actions will publish to PyPI."
+
+slides:
+	cd slides && python3 -m http.server 8080
