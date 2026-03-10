@@ -16,7 +16,7 @@ from github.Repository import Repository
 from git import Repo
 from git.exc import GitCommandError
 
-from phoenixgithub.config import Config, LabelConfig
+from phoenixgithub.config import Config, GitHubAppConfig, LabelConfig
 from phoenixgithub.tools.git_utils import (
     compute_uncovered_paths,
     get_changed_paths,
@@ -35,6 +35,41 @@ class GitHubClient:
         self._gh = Github(config.github.token)
         self._repo: Repository = self._gh.get_repo(config.github.repo)
         self._labels = config.labels
+        self._app_auth: object | None = None
+        self._installation_id: int | None = None
+
+    @classmethod
+    def from_app_auth(
+        cls,
+        config: Config,
+        app_auth: object,
+        installation_id: int,
+        repo: str,
+    ) -> GitHubClient:
+        """Create a client authenticated via GitHub App installation token.
+
+        Args:
+            config: Application configuration.
+            app_auth: GitHubAppAuth instance for token management.
+            installation_id: The GitHub App installation ID.
+            repo: Full repo name (owner/repo).
+        """
+        from phoenixgithub.github_app import GitHubAppAuth
+
+        assert isinstance(app_auth, GitHubAppAuth)
+        # Override repo in config for this client instance
+        config = config.model_copy(
+            update={"github": config.github.model_copy(update={"repo": repo})}
+        )
+        gh = app_auth.get_github_for_installation(installation_id)
+        instance = cls.__new__(cls)
+        instance.config = config
+        instance._gh = gh
+        instance._repo = gh.get_repo(repo)
+        instance._labels = config.labels
+        instance._app_auth = app_auth
+        instance._installation_id = installation_id
+        return instance
 
     # ------------------------------------------------------------------
     # Issues & Labels
@@ -204,7 +239,8 @@ class GitHubClient:
             return str(clone_path)
 
         clone_path.parent.mkdir(parents=True, exist_ok=True)
-        clone_url = f"https://x-access-token:{self.config.github.token}@github.com/{self.config.github.repo}.git"
+        token = self._get_clone_token()
+        clone_url = f"https://x-access-token:{token}@github.com/{self.config.github.repo}.git"
         Repo.clone_from(clone_url, str(clone_path))
         logger.info(f"Cloned {self.config.github.repo} → {clone_path}")
         return str(clone_path)
@@ -330,5 +366,29 @@ class GitHubClient:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _get_clone_token(self) -> str:
+        """Return the best available token for git clone/push operations."""
+        if self._app_auth and self._installation_id:
+            from phoenixgithub.github_app import GitHubAppAuth
+
+            assert isinstance(self._app_auth, GitHubAppAuth)
+            return self._app_auth.get_access_token(self._installation_id)
+        return self.config.github.token
+
+    def refresh_token(self) -> None:
+        """Refresh the installation token and PyGithub client (app mode only).
+
+        Call this before long-running operations that may exceed the
+        1-hour installation token lifetime.
+        """
+        if not self._app_auth or not self._installation_id:
+            return
+        from phoenixgithub.github_app import GitHubAppAuth
+
+        assert isinstance(self._app_auth, GitHubAppAuth)
+        self._gh = self._app_auth.get_github_for_installation(self._installation_id)
+        self._repo = self._gh.get_repo(self.config.github.repo)
+        logger.info("Refreshed GitHub App installation token")
 
 

@@ -35,9 +35,10 @@ BOT_COMMENT_MARKERS = (
 class Orchestrator:
     """Executes a run: PLAN → IMPLEMENT → TEST → PR with retry loop."""
 
-    def __init__(self, config: Config, github: GitHubClient, state: StateManager) -> None:
+    def __init__(self, config: Config, github: GitHubClient, state: StateManager, *, webhook_mode: bool = False) -> None:
         self.config = config
         self.github = github
+        self.webhook_mode = webhook_mode
         self.state = state
         # Single local clone/worktree per repo means runs must execute serially
         # to avoid git checkout/reset collisions across threads.
@@ -433,6 +434,14 @@ class Orchestrator:
                         "### Phoenix Failure Analysis\n\n"
                         "No-progress guardrail triggered: the same root cause has repeated across retries. "
                         f"Keeping label `{self.config.labels.failed}` for manual intervention.",
+                    )
+                elif self.webhook_mode:
+                    # In webhook mode, do NOT auto-relabel to ai:revise — it would
+                    # trigger another webhook event and create an infinite loop.
+                    self.github.comment_on_issue(
+                        issue_number,
+                        f"Keeping label `{self.config.labels.failed}`. "
+                        f"Manually relabel to `{self.config.labels.revise}` to retry.",
                     )
                 elif self.config.agent.auto_revise_on_test_failure:
                     self.github.transition_label(

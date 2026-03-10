@@ -18,6 +18,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "rich>=13.0",
     "click>=8.1",
+    "PyJWT[crypto]>=2.8",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
 ]
 
 [project.scripts]

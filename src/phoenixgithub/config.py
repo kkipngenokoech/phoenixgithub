@@ -11,6 +11,27 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 
+class GitHubAppConfig(BaseModel):
+    """Configuration for GitHub App authentication (webhook mode)."""
+    app_id: int = Field(default_factory=lambda: int(os.getenv("GITHUB_APP_ID", "0")))
+    private_key_path: str = Field(default_factory=lambda: os.getenv("GITHUB_PRIVATE_KEY_PATH", ""))
+    private_key: str = Field(default_factory=lambda: os.getenv("GITHUB_PRIVATE_KEY", ""))
+    webhook_secret: str = Field(default_factory=lambda: os.getenv("GITHUB_WEBHOOK_SECRET", ""))
+    webhook_port: int = Field(default_factory=lambda: int(os.getenv("WEBHOOK_PORT", "8000")))
+
+    @property
+    def is_configured(self) -> bool:
+        return self.app_id > 0 and bool(self.private_key_path or self.private_key)
+
+    def get_private_key(self) -> str:
+        """Return the private key contents, reading from file if needed."""
+        if self.private_key:
+            return self.private_key
+        if self.private_key_path:
+            return Path(self.private_key_path).read_text()
+        raise ValueError("No GitHub App private key configured")
+
+
 class GitHubConfig(BaseModel):
     token: str = Field(default_factory=lambda: os.getenv("GITHUB_TOKEN", ""))
     repo: str = Field(default_factory=lambda: os.getenv("GITHUB_REPO", ""))  # owner/repo
@@ -69,6 +90,7 @@ class AgentConfig(BaseModel):
 
 class Config(BaseModel):
     github: GitHubConfig = Field(default_factory=GitHubConfig)
+    github_app: GitHubAppConfig = Field(default_factory=GitHubAppConfig)
     labels: LabelConfig = Field(default_factory=LabelConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)

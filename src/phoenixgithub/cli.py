@@ -338,6 +338,63 @@ def reset_issue(issue_number: int) -> None:
     console.print(f"[green]Cleared dispatch state for issue #{issue_number}[/green]")
 
 
+@main.command()
+@click.option("--port", default=None, type=int, help="Port to listen on (default: WEBHOOK_PORT or 8000)")
+@click.option("--host", default="0.0.0.0", show_default=True, help="Host to bind to.")
+@click.option("--log-level", default=None, help="Log level (DEBUG, INFO, WARNING)")
+def serve(port: int | None, host: str, log_level: str | None) -> None:
+    """Start the webhook server — receives GitHub App events (no polling)."""
+    config = Config.from_env()
+    _setup_logging(log_level or config.log_level)
+
+    if not config.github_app.is_configured:
+        console.print(
+            "[red]GitHub App not configured.[/red] Set GITHUB_APP_ID and "
+            "GITHUB_PRIVATE_KEY_PATH (or GITHUB_PRIVATE_KEY) in .env"
+        )
+        sys.exit(1)
+
+    from phoenixgithub.github_app import GitHubAppAuth
+    from phoenixgithub.webhook import create_webhook_app
+
+    app_auth = GitHubAppAuth(
+        app_id=config.github_app.app_id,
+        private_key=config.github_app.get_private_key(),
+    )
+    state = StateManager(config.state_file, config.workspace_dir)
+
+    listen_port = port or config.github_app.webhook_port
+
+    console.print("[bold green]PhoenixGitHub Webhook Server[/bold green]")
+    console.print(f"  App ID:  {config.github_app.app_id}")
+    console.print(f"  Listen:  {host}:{listen_port}")
+    console.print(f"  Secret:  {'configured' if config.github_app.webhook_secret else '[yellow]NOT SET[/yellow]'}")
+    console.print()
+
+    def dispatch_from_webhook(run: Run, github_client: GitHubClient) -> None:
+        """Execute a run dispatched by a webhook event."""
+        console.print(f"[yellow]Webhook dispatched run {run.run_id} for {run.repo}#{run.issues[0]}[/yellow]")
+        orchestrator = Orchestrator(config, github_client, state, webhook_mode=True)
+        try:
+            orchestrator.execute(run)
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Run {run.run_id} crashed: {e}", exc_info=True)
+            run.status = RunStatus.FAILED
+            run.error = str(e)
+            state.save_run(run)
+            state.mark_run_finished(run.run_id)
+
+    webhook_app = create_webhook_app(
+        config=config,
+        app_auth=app_auth,
+        state=state,
+        on_dispatch=dispatch_from_webhook,
+    )
+
+    import uvicorn
+    uvicorn.run(webhook_app, host=host, port=listen_port)
+
+
 def _run_in_thread(orchestrator: Orchestrator, state: StateManager, run: Run) -> None:
     """Execute a run in a background thread (used by the daemon)."""
     try:

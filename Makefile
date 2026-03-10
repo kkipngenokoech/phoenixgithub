@@ -1,21 +1,21 @@
-.PHONY: install status watch run-issue labels setup-actions reset-state clean-repo-state clean-workspace-all onboard pre-release release slides
+.PHONY: install status watch run-issue labels setup-actions reset-state clean-repo-state clean-workspace-all onboard pre-release release serve serve-local slides
 PYTHON ?= .venv/bin/python
 
 install:
-	pip install -e .
+	$(PYTHON) -m pip install -e .
 
 status:
-	phoenixgithub status
+	$(PYTHON) -m phoenixgithub.cli status
 
 watch:
-	phoenixgithub watch
+	$(PYTHON) -m phoenixgithub.cli watch
 
 run-issue:
 	@if [ -z "$(ISSUE)" ]; then \
 		echo "Usage: make run-issue ISSUE=<number>"; \
 		exit 1; \
 	fi
-	phoenixgithub run-issue "$(ISSUE)"
+	$(PYTHON) -m phoenixgithub.cli run-issue "$(ISSUE)"
 
 labels:
 	$(PYTHON) scripts/create_labels.py
@@ -41,7 +41,7 @@ onboard:
 	@$(MAKE) clean-repo-state
 	@$(PYTHON) scripts/create_labels.py
 	@$(PYTHON) scripts/install_merge_done_workflow.py
-	@phoenixgithub status
+	@$(PYTHON) -m phoenixgithub.cli status
 	@echo "Onboarding complete. Next: make watch"
 
 pre-release:
@@ -63,6 +63,26 @@ release:
 	@$(MAKE) pre-release TAG="$(TAG)"
 	@gh release create "$(TAG)" --title "$(TAG)" $(if $(NOTES),--notes "$(NOTES)",--generate-notes)
 	@echo "Release $(TAG) created. GitHub Actions will publish to PyPI."
+
+serve:
+	@$(PYTHON) -c "\
+import subprocess, sys, atexit, signal, os; \
+from dotenv import load_dotenv; \
+load_dotenv(); \
+from pyngrok import conf, ngrok; \
+conf.get_default().auth_token = os.getenv('NGROK_AUTHTOKEN', ''); \
+port = 8000; \
+domain = os.getenv('NGROK_DOMAIN', ''); \
+tunnel = ngrok.connect(port, bind_tls=True, hostname=domain) if domain else ngrok.connect(port, bind_tls=True); \
+print(f'\n  Ngrok tunnel: {tunnel.public_url}'); \
+print(f'  Webhook URL:  {tunnel.public_url}/webhook\n'); \
+atexit.register(ngrok.kill); \
+proc = subprocess.Popen([sys.executable, '-m', 'phoenixgithub.cli', 'serve', '--port', str(port)]); \
+signal.signal(signal.SIGINT, lambda *_: (proc.terminate(), sys.exit(0))); \
+proc.wait()"
+
+serve-local:
+	$(PYTHON) -m phoenixgithub.cli serve
 
 slides:
 	cd slides && python3 -m http.server 8080

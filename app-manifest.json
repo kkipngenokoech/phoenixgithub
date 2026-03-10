@@ -1,0 +1,22 @@
+{
+  "name": "phoenix",
+  "url": "https://kipngenokoech.com/projects/phoenixgithub",
+  "hook_attributes": {
+    "url": "https://your-server.example.com/webhook",
+    "active": true
+  },
+  "redirect_url": "",
+  "description": "AI agent that picks up GitHub issues, implements solutions, and creates PRs for human review.",
+  "public": false,
+  "default_events": [
+    "issues",
+    "pull_request",
+    "pull_request_review"
+  ],
+  "default_permissions": {
+    "issues": "write",
+    "pull_requests": "write",
+    "contents": "write",
+    "metadata": "read"
+  }
+}
