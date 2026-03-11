@@ -20,5 +20,5 @@ workspace/
 .vscode/
 *.swp
 .DS_Store
-
+paper.tex
 label-hook.2026-03-10.private-key.pem
